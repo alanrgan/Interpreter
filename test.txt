@@ -1,0 +1,11 @@
+BEGIN
+	a_number is 4;
+	a is a_number;
+	b is 14;
+	b is b + a;
+	BEGIN
+		anothervar is 5;
+		s is anothervar * 2;
+		s is s++--
+	END
+END.
