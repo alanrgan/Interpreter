@@ -4,6 +4,7 @@ LPAREN, RPAREN = 'LPAREN', 'RPAREN'
 BEGIN, END, DOT = 'BEGIN', 'END', 'DOT'
 ID, ASSIGN, SEMI = 'ID', 'ASSIGN', 'SEMI'
 PPLUS, MMINUS = 'PPLUS', 'MMINUS'
+PEQUALS, MEQUALS = 'PEQUALS', 'MEQUALS'
 
 import inspect
 import unicodedata
@@ -122,6 +123,10 @@ class Lexer(object):
                 self.advance(2)
                 return Token(PPLUS, '++')
                 
+            if self.current_char == '+' and self.peek() == '=':
+                self.advance(2)
+                return Token(PEQUALS, '+=')
+                
             if self.current_char == '+':
                 self.advance()
                 return Token(PLUS, '+')
@@ -129,6 +134,10 @@ class Lexer(object):
             if self.current_char == '-' and self.peek() == '-':
                 self.advance(2)
                 return Token(MMINUS, '--')
+                
+            if self.current_char == '-' and self.peek() == '=':
+                self.advance(2)
+                return Token(MEQUALS, '-=')
                 
             if self.current_char == '-':
                 self.advance()
@@ -228,6 +237,18 @@ class Parser(object):
             right = BinOp(left, Token(MINUS, '-'), one)
         node = Assign(left, token, right)
         return node
+        
+    def incdec_assign_statement(self):
+        left = self.variable()
+        token = self.current_token
+        if token.type == PEQUALS:
+            self.eat(PEQUALS)
+            right = BinOp(left, Token(PLUS, '+'), self.expr())
+        elif token.type == MEQUALS:
+            self.eat(MEQUALS)
+            right = BinOp(left, Token(PLUS, '-'), self.expr())
+        node = Assign(left, token, right)
+        return node
 
     def statement(self):
         if self.current_token.type == BEGIN:
@@ -238,6 +259,8 @@ class Parser(object):
                 node = self.assignment_statement()
             elif next_token.type in (PPLUS, MMINUS):
                 node = self.incdec_statement()
+            elif next_token.type in (PEQUALS, MEQUALS):
+                node = self.incdec_assign_statement()
             else:
                 node = self.empty()
         else:

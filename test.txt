@@ -6,6 +6,6 @@ BEGIN
 	BEGIN
 		anothervar is 5;
 		s is anothervar * 2;
-		s is s++--
+		s += anothervar + 3;
 	END
 END.
