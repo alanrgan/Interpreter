@@ -7,6 +7,7 @@ ID, ASSIGN, SEMI = 'ID', 'ASSIGN', 'SEMI'
 PPLUS, MMINUS = 'PPLUS', 'MMINUS'
 PEQUALS, MEQUALS = 'PEQUALS', 'MEQUALS'
 IF, ELSE, THEN = 'IF', 'ELSE', 'THEN'
+GTHAN,LTHAN,EQUALS = 'GTHAN', 'LTHAN', 'EQUALS'
 
 import inspect
 import unicodedata
@@ -24,11 +25,6 @@ class Primitive(AST):
     def __init__(self, token):
         self.token = token
         self.value = token.value
-
-class Bool(AST):
-    def __init__(self, token):
-        self.token = token
-        self.value = token.value
         
 class UnaryOp(AST):
     def __init__(self, op, expr):
@@ -40,6 +36,13 @@ class Compound(AST):
     def __init__(self):
         self.children = []
         
+class Conditional(AST):
+    """Represents a conditional fork"""
+    def __init__(self, pred, conseq, alt=None):
+        self.pred = pred
+        self.conseq = conseq
+        self.alt = alt
+
 class Assign(AST):
     def __init__(self, left, op, right):
         self.left = left
@@ -74,9 +77,11 @@ RESERVED_KEYWORDS = {
     'is': Token('ASSIGN', 'IS'),  
     'if': Token('IF', 'if'),
     'else': Token('ELSE', 'else'),
+    'endif': Token('ENDIF', 'endif'),
     'then': Token('THEN', 'then'),
     'true': Token('BOOL', True),
     'false': Token('BOOL', False),
+    'equals': Token('EQUALS', 'equals'),
 }        
     
 class Lexer(object):
@@ -84,6 +89,9 @@ class Lexer(object):
         self.text = text
         self.pos = 0
         self.current_char = self.text[self.pos]
+        self.prev_char = None
+        self.col_num = 0
+        self.line_num = 1
         
     def error(self):
         raise Exception('Invalid character: ' + repr(self.current_char))
@@ -92,6 +100,7 @@ class Lexer(object):
         if step is None:
             step = 1
         self.pos += step
+        self.col_num += step
         if self.pos > len(self.text) - 1:
             self.current_char = None
         else:
@@ -123,15 +132,19 @@ class Lexer(object):
         return int(result)
         
     def get_next_token(self):
+
         while self.current_char is not None:
             if self.current_char.isspace():
+                if self.current_char == '\n':
+                    self.line_num += 1
+                    self.col_num = 1
                 self.skip_whitespace()
                 continue
             
             if self.current_char.isdigit():
                 return Token(INTEGER, self.integer())
                 
-            if self.current_char == '+' and self.peek() == '+':
+            if self.current_char == '+' and self.peek() == '+' and self.peek(-1).isalnum():
                 self.advance(2)
                 return Token(PPLUS, '++')
                 
@@ -143,7 +156,7 @@ class Lexer(object):
                 self.advance()
                 return Token(PLUS, '+')
                 
-            if self.current_char == '-' and self.peek() == '-':
+            if self.current_char == '-' and self.peek() == '-' and self.peek(-1).isalnum():
                 self.advance(2)
                 return Token(MMINUS, '--')
                 
@@ -181,6 +194,14 @@ class Lexer(object):
             if self.current_char == '.':
                 self.advance()
                 return Token(DOT, '.')
+
+            if self.current_char == '>':
+                self.advance()
+                return Token(GTHAN, '>')
+
+            if self.current_char == '<':
+                self.advance()
+                return Token(LTHAN, '<')
                 
             self.error()
             
@@ -195,10 +216,16 @@ class Lexer(object):
         else:
             return self.text[peek_pos]
             
-    def peekToken(self):
+    def peekToken(self, n=None):
+        if n is None:
+            n = 1
+        if n == 0:
+            return
+
         current_pos = self.pos
         current_char = self.current_char
         token = self.get_next_token()
+        self.peekToken(n-1)
         self.pos = current_pos
         self.current_char = current_char
         return token
@@ -209,10 +236,12 @@ class Parser(object):
         self.current_token = self.lexer.get_next_token()
         
     def error(self):
-        raise Exception('Invalid syntax: ' + self.current_token.type)
+        lnum = repr(self.lexer.line_num)
+        cnum = repr(self.lexer.col_num)
+        token_val = self.current_token.value
+        raise Exception('Invalid syntax on line '+lnum+', col '+cnum+': '+token_val)
         
     def eat(self, token_type):
-        print(inspect.stack()[1][3])
         if self.current_token.type == token_type:
             self.current_token = self.lexer.get_next_token()
         else:
@@ -266,7 +295,6 @@ class Parser(object):
             node = self.if_statement()
         elif self.current_token.type == ID:
             next_token = self.lexer.peekToken()
-            print(next_token.value)
             if next_token.type == ASSIGN:
                 node = self.assignment_statement()
             elif next_token.type in (PPLUS, MMINUS):
@@ -295,26 +323,22 @@ class Parser(object):
         """if_statement : IF BOOL THEN statement_list (else_statement)"""
         interpreter = Interpreter(self)
         self.eat(IF)
-        predicate = self.boolean()
+        predicate = self.expr()
         self.eat(THEN)
         nodes = self.statement_list()
-
-        print(self.current_token)
 
         consequent = Compound()
         for node in nodes:
             consequent.children.append(node)
 
-        if interpreter.visit_Bool(predicate):
-            if self.current_token.type == ELSE:
-                self.else_statement()
-            print(self.current_token)
-            return consequent
-        elif self.current_token.type == ELSE:
+        if self.current_token.type == ELSE:
             alternative = self.else_statement()
-            return alternative
+        else:
+            alternative = None
 
-        return Primitive(Token('BOOL', False))
+        cond = Conditional(predicate,consequent,alternative)
+
+        return cond
 
     def else_statement(self):
         """else_statement : ELSE statement_list"""
@@ -326,7 +350,7 @@ class Parser(object):
         return alternative
 
     def boolean(self):
-        node = Primitive(self.current_token)
+        node = self.expr()
         self.eat(BOOL)
         return node
 
@@ -355,13 +379,13 @@ class Parser(object):
         token = self.current_token
         if token.type in (PLUS, MINUS):
             self.eat(token.type)
-            if self.current_token.type == INTEGER:
-                node = UnaryOp(token, self.factor())
-                return node
-            else:
-                self.error()
+            node = UnaryOp(token, self.factor())
+            return node
         elif token.type == INTEGER:
             self.eat(INTEGER)
+            return Primitive(token)
+        elif token.type == BOOL:
+            self.eat(BOOL)
             return Primitive(token)
         elif token.type == LPAREN:
             self.eat(LPAREN)
@@ -395,13 +419,36 @@ class Parser(object):
         A,B -> S, INTEGER
         """
         node = self.term()
-        while self.current_token.type in(PLUS,MINUS):
+        while self.current_token.type in (PLUS,MINUS,GTHAN,LTHAN,EQUALS):
             token = self.current_token
             if token.type == PLUS:
                 self.eat(PLUS)
             elif token.type == MINUS:
                 self.eat(MINUS)
-                
+            elif token.type == GTHAN:
+                self.eat(GTHAN)
+            elif token.type == LTHAN:
+                self.eat(LTHAN)
+            elif token.type == EQUALS:
+                self.eat(EQUALS)
+            node = BinOp(left=node, op=token, right=self.term())
+        return node
+
+    def bool_expr(self):
+        """
+        bool_expr -> bool_expr EQUALS bool_expr
+        bool_expr -> expr (GTHAN|LTHAN|EQUALS) expr
+        """
+        node = self.expr()
+        while self.current_token.type in (GTHAN, LTHAN, EQUALS):
+            token = self.current_token
+            if token.type == GTHAN:
+                self.eat(GTHAN)
+            elif token.type == LTHAN:
+                self.eat(LTHAN)
+            elif token.type == EQUALS:
+                self.eat(EQUALS)
+
             node = BinOp(left=node, op=token, right=self.term())
         return node
         
@@ -436,10 +483,28 @@ class Interpreter(NodeVisitor):
             return self.visit(node.left) * self.visit(node.right)
         elif node.op.type == DIVIDE:
             return self.visit(node.left) / self.visit(node.right)
+        elif node.op.type == GTHAN:
+            return self.visit(node.left) > self.visit(node.right)
+        elif node.op.type == LTHAN:
+            return self.visit(node.left) < self.visit(node.right)
+        elif node.op.type == EQUALS:
+            return self.visit(node.left) == self.visit(node.right)
             
     def visit_Primitive(self, node):
         return node.value
+
+    def visit_Bool(self, node):
+        if node.token.type == BOOL:
+            return node.value
+        elif hasattr(node, 'op') and node.op.type in (GTHAN,LTHAN,EQUALS):
+            return self.visit_BinOp(node)
         
+    def visit_Conditional(self, node):
+        if self.visit_Bool(node.pred):
+            self.visit_Compound(node.conseq)
+        elif node.alt is not None:
+            self.visit_Compound(node.alt)
+
     def visit_UnaryOp(self, node):
         op = node.op.type
         if op == PLUS:
