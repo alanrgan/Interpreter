@@ -6,6 +6,12 @@ BEGIN
 	BEGIN
 		anothervar is 5;
 		s is anothervar * 2;
-		s += anothervar + 3;
+		s -= anothervar--;
+		if true then
+			e is 2;
+			s += e;
+		else
+			e is 5;
+			s -= e;
 	END
 END.
