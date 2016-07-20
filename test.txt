@@ -1,7 +1,6 @@
 BEGIN
-	a_number is 4;
-	if a_number++ equals 5 then
-		a_number += 3;
+	a_bool is false;
+	if a_bool not equals false then
+		a is 3
 	endif;
-	b is a_number--
 END.
