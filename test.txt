@@ -1,7 +1,7 @@
 BEGIN
 	a_number is 4;
-	if 4 equals 3 then
-		a_number is 5;
-	else if 5 equals 5 then
-		a_number is (3+3 equals 3+3);
+	if a_number++ equals 5 then
+		a_number += 3;
+	endif;
+	b is a_number--
 END.

@@ -6,7 +6,7 @@ BEGIN, END, DOT = 'BEGIN', 'END', 'DOT'
 ID, ASSIGN, SEMI = 'ID', 'ASSIGN', 'SEMI'
 PPLUS, MMINUS = 'PPLUS', 'MMINUS'
 PEQUALS, MEQUALS = 'PEQUALS', 'MEQUALS'
-IF, ELSE, THEN = 'IF', 'ELSE', 'THEN'
+IF, ELSE, THEN, ENDIF = 'IF', 'ELSE', 'THEN', 'ENDIF'
 GTHAN,LTHAN,EQUALS = 'GTHAN', 'LTHAN', 'EQUALS'
 
 import inspect
@@ -233,19 +233,22 @@ class Lexer(object):
 class Parser(object):
     def __init__(self, lexer):
         self.lexer = lexer
+        self.prev_token = None
         self.current_token = self.lexer.get_next_token()
         
-    def error(self):
+    def error(self, expect=None):
         lnum = repr(self.lexer.line_num)
         cnum = repr(self.lexer.col_num)
         token_val = self.current_token.value
-        raise Exception('Invalid syntax on line '+lnum+', col '+cnum+': '+token_val)
+        exp_msg = '' if expect is None else ', Expected: ' + expect
+        raise Exception('Invalid syntax on line '+lnum+', col '+cnum+': '+token_val+exp_msg)
         
     def eat(self, token_type):
         if self.current_token.type == token_type:
+            self.prev_token = self.current_token
             self.current_token = self.lexer.get_next_token()
         else:
-            self.error()
+            self.error(token_type)
 
     def variable(self):
         node = Var(self.current_token)
@@ -256,7 +259,7 @@ class Parser(object):
         left = self.variable()
         token = self.current_token
         self.eat(ASSIGN)
-        right = self.expr()
+        right = self.expr_a()
         node = Assign(left, token, right)
         return node
         
@@ -281,10 +284,10 @@ class Parser(object):
         token = self.current_token
         if token.type == PEQUALS:
             self.eat(PEQUALS)
-            right = BinOp(left, Token(PLUS, '+'), self.expr())
+            right = BinOp(left, Token(PLUS, '+'), self.expr_b())
         elif token.type == MEQUALS:
             self.eat(MEQUALS)
-            right = BinOp(left, Token(MINUS, '-'), self.expr())
+            right = BinOp(left, Token(MINUS, '-'), self.expr_b())
         node = Assign(left, token, right)
         return node
 
@@ -292,7 +295,8 @@ class Parser(object):
         if self.current_token.type == BEGIN:
             node = self.compound_statement()
         elif self.current_token.type == IF:
-            node = self.if_statement()
+            in_else = self.prev_token.type == ELSE
+            node = self.if_statement(in_else=in_else)
         elif self.current_token.type == ID:
             next_token = self.lexer.peekToken()
             if next_token.type == ASSIGN:
@@ -319,11 +323,13 @@ class Parser(object):
             
         return results
 
-    def if_statement(self):
+    def if_statement(self, in_else=None):
         """if_statement : IF BOOL THEN statement_list (else_statement)"""
-        interpreter = Interpreter(self)
+        if in_else is None:
+            in_else = False
+
         self.eat(IF)
-        predicate = self.expr()
+        predicate = self.expr_a()
         self.eat(THEN)
         nodes = self.statement_list()
 
@@ -336,6 +342,9 @@ class Parser(object):
         else:
             alternative = None
 
+        if not in_else:
+            self.eat(ENDIF)
+
         cond = Conditional(predicate,consequent,alternative)
 
         return cond
@@ -345,12 +354,13 @@ class Parser(object):
         self.eat(ELSE)
         alt_nodes = self.statement_list()
         alternative = Compound()
-        for node in alt_nodes:
+
+        for i,node in enumerate(alt_nodes):
             alternative.children.append(node)
         return alternative
 
     def boolean(self):
-        node = self.expr()
+        node = self.expr_a()
         self.eat(BOOL)
         return node
 
@@ -389,7 +399,7 @@ class Parser(object):
             return Primitive(token)
         elif token.type == LPAREN:
             self.eat(LPAREN)
-            node = self.expr()
+            node = self.expr_a()
             self.eat(RPAREN)
             return node
         else:
@@ -398,8 +408,9 @@ class Parser(object):
 
     def bool_factor(self):
         pass
-            
-    def term(self):
+    
+    # highest precedence expression  
+    def expr_c(self):
         node = self.factor()
         
         while self.current_token.type in (MULTIPLY, DIVIDE, PPLUS, MMINUS):
@@ -411,35 +422,31 @@ class Parser(object):
                 node = UnaryOp(op=token, expr=node)
             
         return node
-            
-    def expr(self):
+        
+    # expression with second least precedence    
+    def expr_b(self):
         """
         S -> A PLUS B
         S -> A MINUS B
         A,B -> S, INTEGER
         """
-        node = self.term()
-        while self.current_token.type in (PLUS,MINUS,GTHAN,LTHAN,EQUALS):
+        node = self.expr_c()
+        while self.current_token.type in (PLUS,MINUS):
             token = self.current_token
             if token.type == PLUS:
                 self.eat(PLUS)
             elif token.type == MINUS:
                 self.eat(MINUS)
-            elif token.type == GTHAN:
-                self.eat(GTHAN)
-            elif token.type == LTHAN:
-                self.eat(LTHAN)
-            elif token.type == EQUALS:
-                self.eat(EQUALS)
-            node = BinOp(left=node, op=token, right=self.term())
+            node = BinOp(left=node, op=token, right=self.expr_c())
         return node
 
-    def bool_expr(self):
+    # expression with least precedence
+    def expr_a(self):
         """
         bool_expr -> bool_expr EQUALS bool_expr
         bool_expr -> expr (GTHAN|LTHAN|EQUALS) expr
         """
-        node = self.expr()
+        node = self.expr_b()
         while self.current_token.type in (GTHAN, LTHAN, EQUALS):
             token = self.current_token
             if token.type == GTHAN:
@@ -449,7 +456,7 @@ class Parser(object):
             elif token.type == EQUALS:
                 self.eat(EQUALS)
 
-            node = BinOp(left=node, op=token, right=self.term())
+            node = BinOp(left=node, op=token, right=self.expr_b())
         return node
         
     def parse(self):
