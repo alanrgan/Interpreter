@@ -10,6 +10,7 @@ WHILE, IF, ELSE, THEN, ENDIF = 'WHILE', 'IF', 'ELSE', 'THEN', 'ENDIF'
 GTHAN,LTHAN,GTEQUALS,LTEQUALS = 'GTHAN', 'LTHAN', 'GTEQUALS', 'LTEQUALS'
 EQUALS,NOT,NEQUALS = 'EQUALS', 'NOT', 'NEQUALS'
 AND, OR = 'AND', 'OR'
+COMMENT, BLOCK = 'COMMENT', 'BLOCK'
 
 import inspect
 import unicodedata
@@ -187,7 +188,15 @@ class Lexer(object):
             if self.current_char == '*':
                 self.advance()
                 return Token(MULTIPLY, '*')
-                
+            
+            if self.current_char == '$' and self.peek() == '$':
+                self.advance(2)
+                return Token(BLOCK, '$$')
+
+            if self.current_char == '$':
+                self.advance()
+                return Token(COMMENT, '$')
+
             if self.current_char == '/':
                 self.advance()
                 return Token(DIVIDE, '/')
@@ -287,7 +296,22 @@ class Parser(object):
         else:
             right = self.expr_a()
         return Assign(left, Token(Assign, 'is'), right)
+
+    def comment(self):
+        self.eat(COMMENT)
+        while self.lexer.current_char != '\n':
+            self.lexer.get_next_token()
+        self.prev_token = Token(COMMENT,'$')
+        self.current_token = self.lexer.get_next_token()
+        return self.empty()
         
+    def block_comment(self):
+        self.eat(BLOCK)
+        while self.current_token.type != BLOCK:
+            self.current_token = self.lexer.get_next_token()
+        self.eat(BLOCK)
+        return self.empty()
+
     def incdec_statement(self):
         """
         incdec is same as varASSIGN(varADD1)
@@ -341,8 +365,13 @@ class Parser(object):
     def statement_list(self):
         node = self.statement()
         results = [node]
-        while self.current_token.type == SEMI:
-            self.eat(SEMI)
+        while self.current_token.type in (SEMI,COMMENT,BLOCK):
+            if self.current_token.type == SEMI:
+                self.eat(SEMI)
+            elif self.current_token.type == COMMENT:
+                self.comment()
+            else:
+                self.block_comment()
             results.append(self.statement())
             
         if self.current_token.type == ID:
