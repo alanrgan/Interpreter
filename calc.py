@@ -2,14 +2,16 @@ INTEGER, BOOL = 'INTEGER', 'BOOL'
 PLUS, MINUS, MULTIPLY, EOF = 'PLUS', 'MINUS', 'MULTIPLY', 'EOF'
 DIVIDE = 'DIVIDE'
 LPAREN, RPAREN = 'LPAREN', 'RPAREN'
-BEGIN, END, DOT = 'BEGIN', 'END', 'DOT'
-ID, ASSIGN, SEMI = 'ID', 'ASSIGN', 'SEMI'
+BEGIN, END = 'BEGIN', 'END'
+ID, ASSIGN = 'ID', 'ASSIGN'
+DOT, COMMA, SEMI = 'DOT', 'COMMA', 'SEMI'
 PPLUS, MMINUS = 'PPLUS', 'MMINUS'
 PEQUALS, MEQUALS = 'PEQUALS', 'MEQUALS'
-WHILE, IF, ELSE, THEN, ENDIF = 'WHILE', 'IF', 'ELSE', 'THEN', 'ENDIF'
+WHILE, FOR, IF, ELSE, THEN, ENDIF = 'WHILE', 'FOR', 'IF', 'ELSE', 'THEN', 'ENDIF'
 GTHAN,LTHAN,GTEQUALS,LTEQUALS = 'GTHAN', 'LTHAN', 'GTEQUALS', 'LTEQUALS'
 EQUALS,NOT,NEQUALS = 'EQUALS', 'NOT', 'NEQUALS'
 AND, OR = 'AND', 'OR'
+DOTRANGE = 'DOTRANGE'
 COMMENT, BLOCK = 'COMMENT', 'BLOCK'
 
 import inspect
@@ -50,6 +52,15 @@ class While(AST):
     def __init__(self, pred, conseq):
         self.pred = pred
         self.conseq = conseq
+
+class For(AST):
+    def __init__(self, var, assign, range, cond, post, conseq):
+        self.assign = assign
+        self.range = range
+        self.cond = cond
+        self.post = post
+        self.conseq = conseq
+        self.var = var
 
 class Assign(AST):
     def __init__(self, left, op, right):
@@ -95,7 +106,8 @@ RESERVED_KEYWORDS = {
     'equals': Token(EQUALS, 'equals'),
     'not': Token(NOT, 'not'),
     'and': Token(AND, 'and'),
-    'or': Token(OR, 'and')
+    'or': Token(OR, 'and'),
+    'for': Token(FOR, 'for'),
 }        
     
 class Lexer(object):
@@ -215,7 +227,15 @@ class Lexer(object):
             if self.current_char == ';':
                 self.advance()
                 return Token(SEMI, ';')
+
+            if self.current_char == ',':
+                self.advance()
+                return Token(COMMA, ',')
                 
+            if self.current_char == '.' and self.peek() == '.':
+                self.advance(2)
+                return Token(DOTRANGE, '..')
+
             if self.current_char == '.':
                 self.advance()
                 return Token(DOT, '.')
@@ -348,6 +368,8 @@ class Parser(object):
             node = self.if_statement(in_else=in_else)
         elif self.current_token.type == WHILE:
             node = self.while_loop()
+        elif self.current_token.type == FOR:
+            node = self.for_loop()
         elif self.current_token.type == ID:
             next_token = self.lexer.peekToken()
             if next_token.type == ASSIGN:
@@ -386,6 +408,39 @@ class Parser(object):
         consequent = self.compound_statement()
         self.eat(END)
         return While(predicate, consequent)
+
+    def for_loop(self):
+        var = begin_range = end_range = cond = post = None
+        self.eat(FOR)
+
+        assignment = self.assignment_statement()
+        begin_range = None
+        if self.current_token.type == DOTRANGE:
+            var = assignment.left
+            begin_range = assignment.right
+            self.eat(DOTRANGE)
+            end_range = self.expr_a()
+
+            if self.current_token.type == COMMA:
+                # if post step is specified
+                self.eat(COMMA)
+                post = self.statement()
+            else:
+                # otherwise default is single step increment
+                one = Primitive(Token(INTEGER, 1))
+                right = BinOp(var, Token(PLUS, '+'), one)
+                post = Assign(var, Token('ASSIGN','is'), right)
+                
+        # if condition based for loop
+        if begin_range is None:
+            cond = self.expr_a()
+            self.eat(COMMA)
+            post = self.expr_a()
+        
+        self.eat(THEN)
+        consequent = self.compound_statement()
+        self.eat(END)
+        return For(var=var,assign=assignment,range=(begin_range,end_range),cond=cond,post=post,conseq=consequent)
 
     def if_statement(self, in_else=None):
         """if_statement : IF BOOL THEN statement_list (else_statement)"""
@@ -570,14 +625,28 @@ class Interpreter(NodeVisitor):
         
     def visit_Conditional(self, node):
         if self.visit_Bool(node.pred):
-            self.visit_Compound(node.conseq)
+            self.visit(node.conseq)
         elif node.alt is not None:
-            self.visit_Compound(node.alt)
+            self.visit(node.alt)
 
     def visit_While(self, node):
         if self.visit_Bool(node.pred):
-            self.visit_Compound(node.conseq)
-            self.visit_While(node)
+            self.visit(node.conseq)
+            self.visit(node)
+
+    def visit_For(self, node):
+        self.visit(node.assign)
+        self.visit_For_helper(node)
+
+    def visit_For_helper(self, node):
+        if node.var is not None:
+            cond = self.visit(node.var) < self.visit(node.range[1])
+        else:
+            cond = self.visit_Bool(node.cond)
+        if cond:
+            self.visit(node.conseq)
+            self.visit(node.post)
+            self.visit_For_helper(node)
 
     def visit_UnaryOp(self, node):
         op = node.op.type
