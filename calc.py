@@ -118,6 +118,7 @@ class Lexer(object):
             
         token = RESERVED_KEYWORDS.get(result, Token(ID, result))
         if token.type == NOT and self.peekToken().type == EQUALS:
+            self.get_next_token()
             return Token('NEQUALS', 'not equals')
         return token
         
@@ -245,7 +246,7 @@ class Parser(object):
     def error(self, expect=None):
         lnum = repr(self.lexer.line_num)
         cnum = repr(self.lexer.col_num)
-        token_val = self.current_token.value
+        token_val = repr(self.current_token.value)
         exp_msg = '' if expect is None else ', Expected: ' + expect
         raise Exception('Invalid syntax on line '+lnum+', col '+cnum+': '+token_val+exp_msg)
         
@@ -290,10 +291,10 @@ class Parser(object):
         token = self.current_token
         if token.type == PEQUALS:
             self.eat(PEQUALS)
-            right = BinOp(left, Token(PLUS, '+'), self.expr_c())
+            right = BinOp(left, Token(PLUS, '+'), self.expr_d())
         elif token.type == MEQUALS:
             self.eat(MEQUALS)
-            right = BinOp(left, Token(MINUS, '-'), self.expr_c())
+            right = BinOp(left, Token(MINUS, '-'), self.expr_d())
         node = Assign(left, token, right)
         return node
 
@@ -393,7 +394,6 @@ class Parser(object):
     # NTS: order matters here
     def factor(self):
         token = self.current_token
-        print(token.type)
         if token.type in (PLUS, MINUS):
             self.eat(token.type)
             node = UnaryOp(token, self.factor())
@@ -410,7 +410,6 @@ class Parser(object):
             self.eat(RPAREN)
             return node
         elif token.type == NOT:
-            print("here2")
             self.eat(NOT)
             node = UnaryOp(token, self.expr_a())
             return node
@@ -422,73 +421,53 @@ class Parser(object):
         pass
     
     # highest precedence expression  
-    def expr_d(self):
-        node = self.factor()
-        
-        while self.current_token.type in (MULTIPLY, DIVIDE, PPLUS, MMINUS, NOT):
-            token = self.current_token
-            self.eat(token.type)
-            if token.type in (MULTIPLY, DIVIDE):
-                node = BinOp(left=node, op=token, right=self.factor())
-            elif token.type in (PPLUS, MMINUS):
-                node = UnaryOp(op=token, expr=node)
-            elif token.type == NOT:
-                print("here")
-                if self.current_token.type == EQUALS:
-                    self.eat(EQUALS)
-                    node = BinOp(left=node, op=Token(NEQUALS,'not equals'), right=self.expr_a())
-                else:
-                    node = UnaryOp(op=token, expr=node)
-            
-        return node
+    def expr_e(self):
+        token = self.lexer.peekToken()
+
+        if token.type in (MULTIPLY, DIVIDE):
+            return self.expr(tup=(MULTIPLY,DIVIDE), func=self.factor)
+        elif token.type in (PPLUS, MMINUS):
+            node = self.factor()
+            while self.current_token.type in (PPLUS, MMINUS):
+                self.eat(token.type)
+                node = UnaryOp(op=token,expr=node)
+        return self.factor()
         
     # expression with less precedence    
-    def expr_c(self):
+    def expr_d(self):
         """
         S -> A PLUS B
         S -> A MINUS B
         A,B -> S, INTEGER
         """
-        node = self.expr_d()
-        while self.current_token.type in (PLUS,MINUS):
-            token = self.current_token
-            if token.type == PLUS:
-                self.eat(PLUS)
-            elif token.type == MINUS:
-                self.eat(MINUS)
-            node = BinOp(left=node, op=token, right=self.expr_d())
-        return node
+        return self.expr(tup=(PLUS,MINUS), func=self.expr_e)
+
+    # expression with even less precedence
+    def expr_c(self):
+        """
+        expr_c -> expr_d
+        expr_c -> expr_c (GTHAN|LTHAN|EQUALS) expr_c
+        """
+        return self.expr(tup=(GTHAN,LTHAN), func=self.expr_d)
 
     # expression with even less precedence
     def expr_b(self):
-        """
-        expr_b -> expr_c
-        expr_b -> expr_b (GTHAN|LTHAN|EQUALS) expr_b
-        """
-        node = self.expr_c()
-        while self.current_token.type in (GTHAN, LTHAN):
-            token = self.current_token
-            if token.type == GTHAN:
-                self.eat(GTHAN)
-            elif token.type == LTHAN:
-                self.eat(LTHAN)
-
-            node = BinOp(left=node, op=token, right=self.expr_c())
-        return node
-
-    # expression with even less precedence
-    def expr_a(self):
-        node = self.expr_b()
-        while self.current_token.type in (EQUALS, NEQUALS):
-            token = self.current_token
-            if token.type == EQUALS:
-                self.eat(EQUALS)
-            elif token.type == NEQUALS:
-                self.eat(NEQUALS)
-                # problem is that it comes here thinking eval normal equals sign
-            node = BinOp(left=node, op=token, right=self.expr_b())
-        return node
+        return self.expr(tup=(EQUALS,NEQUALS), func=self.expr_c)
         
+    def expr_a(self):
+        return self.expr(tup=(AND,OR),func=self.expr_b)
+
+    # func is the next highest precedence expr function
+    # and tup is a tuple containing token types to evaluate
+    def expr(self, tup, func):
+        node = func()
+
+        while self.current_token.type in tup:
+            token = self.current_token
+            self.eat(token.type)
+            node =  BinOp(left=node, op=token, right=func())
+        return node
+
     def parse(self):
         node = self.program()
         if self.current_token.type != EOF:
@@ -526,6 +505,10 @@ class Interpreter(NodeVisitor):
             return self.visit(node.left) < self.visit(node.right)
         elif node.op.type == EQUALS:
             return self.visit(node.left) == self.visit(node.right)
+        elif node.op.type == AND:
+            return self.visit(node.left) and self.visit(node.right)
+        elif node.op.type == OR:
+            return self.visit(node.left) or self.visit(node.right)
             
     def visit_Primitive(self, node):
         return node.value
@@ -534,7 +517,7 @@ class Interpreter(NodeVisitor):
         if node.token.type == BOOL:
             return node.value
         elif hasattr(node, 'op'):
-            if node.op.type in (GTHAN,LTHAN,EQUALS):
+            if node.op.type in (GTHAN,LTHAN,EQUALS,AND,OR):
                 return self.visit_BinOp(node)
             elif node.op.type == NOT:
                 return self.visit_UnaryOp(node)

@@ -1,6 +1,10 @@
 BEGIN
-	a_bool is false;
-	if a_bool not equals false then
-		a is 3
+	a is 5;
+	b is a + 4;
+	c is b + a;
+	if b > c/2 and (c < 3 or 2*a > 9) then
+		result is true;
+	else
+		result is false;
 	endif;
 END.
