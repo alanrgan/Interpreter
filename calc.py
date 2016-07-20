@@ -6,8 +6,9 @@ BEGIN, END, DOT = 'BEGIN', 'END', 'DOT'
 ID, ASSIGN, SEMI = 'ID', 'ASSIGN', 'SEMI'
 PPLUS, MMINUS = 'PPLUS', 'MMINUS'
 PEQUALS, MEQUALS = 'PEQUALS', 'MEQUALS'
-IF, ELSE, THEN, ENDIF = 'IF', 'ELSE', 'THEN', 'ENDIF'
-GTHAN,LTHAN,EQUALS,NOT,NEQUALS = 'GTHAN', 'LTHAN', 'EQUALS', 'NOT', 'NEQUALS'
+WHILE, IF, ELSE, THEN, ENDIF = 'WHILE', 'IF', 'ELSE', 'THEN', 'ENDIF'
+GTHAN,LTHAN,GTEQUALS,LTEQUALS = 'GTHAN', 'LTHAN', 'GTEQUALS', 'LTEQUALS'
+EQUALS,NOT,NEQUALS = 'EQUALS', 'NOT', 'NEQUALS'
 AND, OR = 'AND', 'OR'
 
 import inspect
@@ -44,6 +45,11 @@ class Conditional(AST):
         self.conseq = conseq
         self.alt = alt
 
+class While(AST):
+    def __init__(self, pred, conseq):
+        self.pred = pred
+        self.conseq = conseq
+
 class Assign(AST):
     def __init__(self, left, op, right):
         self.left = left
@@ -73,19 +79,22 @@ class Token(object):
         return self.__str__()
         
 RESERVED_KEYWORDS = {
-    'BEGIN': Token('BEGIN', 'BEGIN'),
-    'END': Token('END', 'END'),
-    'is': Token('ASSIGN', 'IS'),  
-    'if': Token('IF', 'if'),
-    'else': Token('ELSE', 'else'),
-    'endif': Token('ENDIF', 'endif'),
-    'then': Token('THEN', 'then'),
-    'true': Token('BOOL', True),
-    'false': Token('BOOL', False),
-    'equals': Token('EQUALS', 'equals'),
-    'not': Token('NOT', 'not'),
-    'and': Token('AND', 'and'),
-    'or': Token('OR', 'and')
+    'BEGIN': Token(BEGIN, 'BEGIN'),
+    'begin': Token(BEGIN, 'begin'),
+    'END': Token(END, 'END'),
+    'end': Token(END, 'end'),
+    'is': Token(ASSIGN, 'is'),
+    'while': Token(WHILE, 'while'),
+    'if': Token(IF, 'if'),
+    'else': Token(ELSE, 'else'),
+    'endif': Token(ENDIF, 'endif'),
+    'then': Token(THEN, 'then'),
+    'true': Token(BOOL, True),
+    'false': Token(BOOL, False),
+    'equals': Token(EQUALS, 'equals'),
+    'not': Token(NOT, 'not'),
+    'and': Token(AND, 'and'),
+    'or': Token(OR, 'and')
 }        
     
 class Lexer(object):
@@ -144,8 +153,8 @@ class Lexer(object):
             if self.current_char.isspace():
                 if self.current_char == '\n':
                     self.line_num += 1
-                    self.col_num = 1
                 self.skip_whitespace()
+                self.col_num = 1
                 continue
             
             if self.current_char.isdigit():
@@ -202,9 +211,17 @@ class Lexer(object):
                 self.advance()
                 return Token(DOT, '.')
 
+            if self.current_char == '>' and self.peek() == '=':
+                self.advance(2)
+                return Token(GTEQUALS, '>=')
+
             if self.current_char == '>':
                 self.advance()
                 return Token(GTHAN, '>')
+
+            if self.current_char == '<' and self.peek() == '=':
+                self.advance(2)
+                return Token(LTEQUALS, '<=')
 
             if self.current_char == '<':
                 self.advance()
@@ -264,11 +281,12 @@ class Parser(object):
 
     def assignment_statement(self):
         left = self.variable()
-        token = self.current_token
         self.eat(ASSIGN)
-        right = self.expr_a()
-        node = Assign(left, token, right)
-        return node
+        if self.lexer.peekToken().type == ASSIGN:
+            right = self.assignment_statement()
+        else:
+            right = self.expr_a()
+        return Assign(left, Token(Assign, 'is'), right)
         
     def incdec_statement(self):
         """
@@ -304,6 +322,8 @@ class Parser(object):
         elif self.current_token.type == IF:
             in_else = self.prev_token.type == ELSE
             node = self.if_statement(in_else=in_else)
+        elif self.current_token.type == WHILE:
+            node = self.while_loop()
         elif self.current_token.type == ID:
             next_token = self.lexer.peekToken()
             if next_token.type == ASSIGN:
@@ -330,6 +350,14 @@ class Parser(object):
             
         return results
 
+    def while_loop(self):
+        self.eat(WHILE)
+        predicate = self.expr_a()
+        self.eat(THEN)
+        consequent = self.compound_statement()
+        self.eat(END)
+        return While(predicate, consequent)
+
     def if_statement(self, in_else=None):
         """if_statement : IF BOOL THEN statement_list (else_statement)"""
         if in_else is None:
@@ -338,11 +366,8 @@ class Parser(object):
         self.eat(IF)
         predicate = self.expr_a()
         self.eat(THEN)
-        nodes = self.statement_list()
 
-        consequent = Compound()
-        for node in nodes:
-            consequent.children.append(node)
+        consequent = self.compound_statement()
 
         if self.current_token.type == ELSE:
             alternative = self.else_statement()
@@ -359,11 +384,7 @@ class Parser(object):
     def else_statement(self):
         """else_statement : ELSE statement_list"""
         self.eat(ELSE)
-        alt_nodes = self.statement_list()
-        alternative = Compound()
-
-        for i,node in enumerate(alt_nodes):
-            alternative.children.append(node)
+        alternative = self.compound_statement()
         return alternative
 
     def boolean(self):
@@ -372,10 +393,9 @@ class Parser(object):
         return node
 
     def compound_statement(self):
-        """compound_statement : BEGIN statement_list END"""
-        self.eat(BEGIN)
+        """compound_statement : statement_list """
         nodes = self.statement_list()
-        self.eat(END)
+        
         root = Compound()
         for node in nodes:
             root.children.append(node)
@@ -384,7 +404,9 @@ class Parser(object):
             
     def program(self):
         """program : compound_statement DOT"""
+        self.eat(BEGIN)
         node = self.compound_statement()
+        self.eat(END)
         self.eat(DOT)
         return node
         
@@ -398,11 +420,8 @@ class Parser(object):
             self.eat(token.type)
             node = UnaryOp(token, self.factor())
             return node
-        elif token.type == INTEGER:
-            self.eat(INTEGER)
-            return Primitive(token)
-        elif token.type == BOOL:
-            self.eat(BOOL)
+        elif token.type in (INTEGER, BOOL):
+            self.eat(token.type)
             return Primitive(token)
         elif token.type == LPAREN:
             self.eat(LPAREN)
@@ -416,9 +435,6 @@ class Parser(object):
         else:
             node = self.variable()
             return node
-
-    def bool_factor(self):
-        pass
     
     # highest precedence expression  
     def expr_e(self):
@@ -427,10 +443,7 @@ class Parser(object):
         if token.type in (MULTIPLY, DIVIDE):
             return self.expr(tup=(MULTIPLY,DIVIDE), func=self.factor)
         elif token.type in (PPLUS, MMINUS):
-            node = self.factor()
-            while self.current_token.type in (PPLUS, MMINUS):
-                self.eat(token.type)
-                node = UnaryOp(op=token,expr=node)
+            return self.incdec_statement()
         return self.factor()
         
     # expression with less precedence    
@@ -448,7 +461,7 @@ class Parser(object):
         expr_c -> expr_d
         expr_c -> expr_c (GTHAN|LTHAN|EQUALS) expr_c
         """
-        return self.expr(tup=(GTHAN,LTHAN), func=self.expr_d)
+        return self.expr(tup=(GTHAN,LTHAN,GTEQUALS,LTEQUALS), func=self.expr_d)
 
     # expression with even less precedence
     def expr_b(self):
@@ -503,6 +516,10 @@ class Interpreter(NodeVisitor):
             return self.visit(node.left) > self.visit(node.right)
         elif node.op.type == LTHAN:
             return self.visit(node.left) < self.visit(node.right)
+        elif node.op.type == GTEQUALS:
+            return self.visit(node.left) >= self.visit(node.right)
+        elif node.op.type == LTEQUALS:
+            return self.visit(node.left) <= self.visit(node.right)
         elif node.op.type == EQUALS:
             return self.visit(node.left) == self.visit(node.right)
         elif node.op.type == AND:
@@ -517,7 +534,7 @@ class Interpreter(NodeVisitor):
         if node.token.type == BOOL:
             return node.value
         elif hasattr(node, 'op'):
-            if node.op.type in (GTHAN,LTHAN,EQUALS,AND,OR):
+            if node.op.type in (GTHAN,LTHAN,GTEQUALS,LTEQUALS,EQUALS,AND,OR):
                 return self.visit_BinOp(node)
             elif node.op.type == NOT:
                 return self.visit_UnaryOp(node)
@@ -527,6 +544,11 @@ class Interpreter(NodeVisitor):
             self.visit_Compound(node.conseq)
         elif node.alt is not None:
             self.visit_Compound(node.alt)
+
+    def visit_While(self, node):
+        if self.visit_Bool(node.pred):
+            self.visit_Compound(node.conseq)
+            self.visit_While(node)
 
     def visit_UnaryOp(self, node):
         op = node.op.type
@@ -555,6 +577,7 @@ class Interpreter(NodeVisitor):
     def visit_Assign(self, node):
         var_name = node.left.value
         self.GLOBAL_SCOPE[var_name] = self.visit(node.right)
+        return self.GLOBAL_SCOPE[var_name]
         
     def visit_Var(self, node):
         var_name = node.value
