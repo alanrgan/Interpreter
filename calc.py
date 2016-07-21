@@ -7,7 +7,7 @@ ID, ASSIGN = 'ID', 'ASSIGN'
 DOT, COMMA, SEMI = 'DOT', 'COMMA', 'SEMI'
 PPLUS, MMINUS = 'PPLUS', 'MMINUS'
 PEQUALS, MEQUALS = 'PEQUALS', 'MEQUALS'
-WHILE, FOR, IF, ELSE, THEN = 'WHILE', 'FOR', 'IF', 'ELSE', 'THEN'
+WHILE, FOR, IF, ELSE, THEN, BREAK = 'WHILE', 'FOR', 'IF', 'ELSE', 'THEN', 'BREAK'
 GTHAN,LTHAN,GTEQUALS,LTEQUALS = 'GTHAN', 'LTHAN', 'GTEQUALS', 'LTEQUALS'
 EQUALS,NOT,NEQUALS = 'EQUALS', 'NOT', 'NEQUALS'
 AND, OR = 'AND', 'OR'
@@ -63,6 +63,9 @@ class For(AST):
         self.post = post
         self.conseq = conseq
         self.var = var
+
+class Break(AST):
+    pass
 
 class Assign(AST):
     def __init__(self, left, op, right):
@@ -145,6 +148,7 @@ RESERVED_KEYWORDS = {
     'end': Token(END, 'end'),
     'is': Token(ASSIGN, 'is'),
     'while': Token(WHILE, 'while'),
+    'break': Token(BREAK, 'break'),
     'if': Token(IF, 'if'),
     'else': Token(ELSE, 'else'),
     'then': Token(THEN, 'then'),
@@ -420,6 +424,8 @@ class Parser(object):
             node = self.for_loop()
         elif self.current_token.type == PRINT:
             node = self.print_func()
+        elif self.current_token.type == BREAK:
+            node = self.break_statement()
         elif self.current_token.type == ID:
             next_token = self.lexer.peekToken()
             if next_token.type == ASSIGN:
@@ -471,6 +477,7 @@ class Parser(object):
             begin_range = assignment.right
             self.eat(DOTRANGE)
             end_range = self.expr_a()
+            print(end_range.value)
 
             if self.current_token.type == COMMA:
                 # if post step is specified
@@ -493,6 +500,10 @@ class Parser(object):
         consequent = self.compound_statement()
         self.eat(END)
         return For(var=var,assign=assignment,range=(begin_range,end_range),cond=cond,post=post,conseq=consequent)
+
+    def break_statement(self):
+        self.eat(BREAK)
+        return Break()
 
     def print_func(self):
         self.eat(PRINT)
@@ -636,10 +647,10 @@ class NodeVisitor(object):
     def visit(self, node, env=None, caller=None):
         method_name = 'visit_' + type(node).__name__
         visitor = getattr(self, method_name, self.generic_visit)
-        if 'caller' in inspect.getargspec(visitor).args:
-            return visitor(node, env, caller)
-        else:
-            return visitor(node, env)
+        #if 'caller' in inspect.getargspec(visitor).args:
+        return visitor(node, env, caller)
+        #else:
+        #    return visitor(node, env)
         
     def generic_visit(self, node):
         raise Exception('No visit_{} method'.format(type(node).__name__))
@@ -650,7 +661,7 @@ class Interpreter(NodeVisitor):
     def __init__(self, parser):
         self.parser = parser
     
-    def visit_BinOp(self, node, env):
+    def visit_BinOp(self, node, env, caller=None):
         left = self.visit(node.left, env)
         right = self.visit(node.right, env)
         if node.op.type == PLUS:
@@ -676,10 +687,10 @@ class Interpreter(NodeVisitor):
         elif node.op.type == OR:
             return left or right
             
-    def visit_Primitive(self, node, env):
+    def visit_Primitive(self, node, env, caller=None):
         return node.value
 
-    def visit_Bool(self, node, env):
+    def visit_Bool(self, node, env, caller=None):
         if node.token.type == BOOL:
             return node.value
         elif hasattr(node, 'op'):
@@ -688,36 +699,42 @@ class Interpreter(NodeVisitor):
             elif node.op.type == NOT:
                 return self.visit_UnaryOp(node, env)
         
-    def visit_Conditional(self, node, env):
+    def visit_Conditional(self, node, env, caller=None):
+        broken = False
         if self.visit_Bool(node.pred, env):
-            self.visit(node.conseq, env)
+            broken = self.visit(node.conseq, env)
         elif node.alt is not None:
-            self.visit(node.alt, env)
+            broken = self.visit(node.alt, env)
+        if broken is True:
+            return True
 
-    def visit_While(self, node, env):
-        if self.visit_Bool(node.pred, env):
-            self.visit(node.conseq, env)
-            self.visit(node, env)
+    def visit_While(self, node, env, caller=None):
+        while self.visit_Bool(node.pred, env):
+            broken = self.visit(node.conseq, env)
+            if broken is True:
+                break;
 
-    def visit_Print(self, node, env):
+    def visit_Print(self, node, env, caller=None):
         print(self.visit(node.arg, env))
 
-    def visit_For(self, node, env):
+    def visit_For(self, node, env, caller):
         env = env.extend()
         left = self.visit(node.assign, env)
         self.visit_For_helper(node, env)
 
-    def visit_For_helper(self, node, env):
-        if node.var is not None:
-            cond = self.visit(node.var, env) < self.visit(node.range[1], env)
-        else:
-            cond = self.visit_Bool(node.cond, env)
-        if cond:
-            self.visit(node.conseq, env, 'for')
-            self.visit(node.post, env)
-            self.visit_For_helper(node, env)
+    def visit_For_helper(self, node, env, caller=None):
+        cond = True
+        while cond:
+            if node.var is not None:
+                cond = self.visit(node.var, env) < self.visit(node.range[1], env)
+            else:
+                cond = self.visit_Bool(node.cond, env)
+            broken = self.visit(node.conseq, env, 'for')
+            if broken is not True:
+                self.visit(node.post, env)
+            cond = cond and not broken
 
-    def visit_UnaryOp(self, node, env):
+    def visit_UnaryOp(self, node, env, caller=None):
         op = node.op.type
         if op == PLUS:
             return +self.visit(node.expr, env)
@@ -738,18 +755,23 @@ class Interpreter(NodeVisitor):
         if caller not in ('interpret','for'):
             env = env.extend()
         for child in node.children:
-            self.visit(child, env)
+            broken = self.visit(child, env)
+            if broken is True:
+                return True
+
+    def visit_Break(self, node, env, caller=None):
+        return True
             
-    def visit_NoOp(self, node, env):
+    def visit_NoOp(self, node, env, caller=None):
         pass
     
-    def visit_Assign(self, node, env):
+    def visit_Assign(self, node, env, caller=None):
         var_name = node.left.value
         right = self.visit(node.right, env)
         env.set(var_name, right)
         return right
         
-    def visit_Var(self, node, env):
+    def visit_Var(self, node, env, caller=None):
         var_name = node.value
         val = env.get(var_name)
         if val is None:

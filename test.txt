@@ -1,9 +1,8 @@
 BEGIN
-	x is 3;
-	y is 0;
+	x is a is 0;
+	y is 10000;
 
-	for a is 0..x then
-		x--;
-		y is 2
+	while a < y then
+		a++;
 	end;
 END.
