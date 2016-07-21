@@ -7,7 +7,8 @@ ID, ASSIGN = 'ID', 'ASSIGN'
 DOT, COMMA, SEMI = 'DOT', 'COMMA', 'SEMI'
 PPLUS, MMINUS = 'PPLUS', 'MMINUS'
 PEQUALS, MEQUALS = 'PEQUALS', 'MEQUALS'
-WHILE, FOR, IF, ELSE, THEN, BREAK = 'WHILE', 'FOR', 'IF', 'ELSE', 'THEN', 'BREAK'
+WHILE, FOR, IF, ELSE, THEN = 'WHILE', 'FOR', 'IF', 'ELSE', 'THEN'
+BREAK, CONTINUE = 'BREAK', 'CONTINUE'
 GTHAN,LTHAN,GTEQUALS,LTEQUALS = 'GTHAN', 'LTHAN', 'GTEQUALS', 'LTEQUALS'
 EQUALS,NOT,NEQUALS = 'EQUALS', 'NOT', 'NEQUALS'
 AND, OR = 'AND', 'OR'
@@ -65,6 +66,9 @@ class For(AST):
         self.var = var
 
 class Break(AST):
+    pass
+
+class Continue(AST):
     pass
 
 class Assign(AST):
@@ -160,6 +164,7 @@ RESERVED_KEYWORDS = {
     'or': Token(OR, 'and'),
     'for': Token(FOR, 'for'),
     'print': Token(PRINT, 'print'),
+    'continue': Token(CONTINUE, 'continue'),
 }        
     
 class Lexer(object):
@@ -426,6 +431,8 @@ class Parser(object):
             node = self.print_func()
         elif self.current_token.type == BREAK:
             node = self.break_statement()
+        elif self.current_token.type == CONTINUE:
+            node = self.continue_statement()
         elif self.current_token.type == ID:
             next_token = self.lexer.peekToken()
             if next_token.type == ASSIGN:
@@ -477,7 +484,6 @@ class Parser(object):
             begin_range = assignment.right
             self.eat(DOTRANGE)
             end_range = self.expr_a()
-            print(end_range.value)
 
             if self.current_token.type == COMMA:
                 # if post step is specified
@@ -504,6 +510,10 @@ class Parser(object):
     def break_statement(self):
         self.eat(BREAK)
         return Break()
+
+    def continue_statement(self):
+        self.eat(CONTINUE)
+        return Continue()
 
     def print_func(self):
         self.eat(PRINT)
@@ -647,10 +657,7 @@ class NodeVisitor(object):
     def visit(self, node, env=None, caller=None):
         method_name = 'visit_' + type(node).__name__
         visitor = getattr(self, method_name, self.generic_visit)
-        #if 'caller' in inspect.getargspec(visitor).args:
         return visitor(node, env, caller)
-        #else:
-        #    return visitor(node, env)
         
     def generic_visit(self, node):
         raise Exception('No visit_{} method'.format(type(node).__name__))
@@ -700,18 +707,17 @@ class Interpreter(NodeVisitor):
                 return self.visit_UnaryOp(node, env)
         
     def visit_Conditional(self, node, env, caller=None):
-        broken = False
+        res = None
         if self.visit_Bool(node.pred, env):
-            broken = self.visit(node.conseq, env)
+            res = self.visit(node.conseq, env)
         elif node.alt is not None:
-            broken = self.visit(node.alt, env)
-        if broken is True:
-            return True
+            res = self.visit(node.alt, env)
+        return res
 
     def visit_While(self, node, env, caller=None):
         while self.visit_Bool(node.pred, env):
-            broken = self.visit(node.conseq, env)
-            if broken is True:
+            res = self.visit(node.conseq, env)
+            if res == 'Break':
                 break;
 
     def visit_Print(self, node, env, caller=None):
@@ -729,10 +735,11 @@ class Interpreter(NodeVisitor):
                 cond = self.visit(node.var, env) < self.visit(node.range[1], env)
             else:
                 cond = self.visit_Bool(node.cond, env)
-            broken = self.visit(node.conseq, env, 'for')
-            if broken is not True:
+            res = self.visit(node.conseq, env, 'for')
+            broken, cont = res == 'Break', res == 'Continue'
+            if not broken:
                 self.visit(node.post, env)
-            cond = cond and not broken
+            cond = cond and (cont or not broken)
 
     def visit_UnaryOp(self, node, env, caller=None):
         op = node.op.type
@@ -755,12 +762,15 @@ class Interpreter(NodeVisitor):
         if caller not in ('interpret','for'):
             env = env.extend()
         for child in node.children:
-            broken = self.visit(child, env)
-            if broken is True:
-                return True
+            res = self.visit(child, env)
+            if res in ('Break', 'Continue'):
+                return res
 
     def visit_Break(self, node, env, caller=None):
-        return True
+        return type(node).__name__
+
+    def visit_Continue(self, node, env, caller=None):
+        return type(node).__name__
             
     def visit_NoOp(self, node, env, caller=None):
         pass

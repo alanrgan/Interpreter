@@ -2,7 +2,10 @@ BEGIN
 	x is a is 0;
 	y is 10000;
 
-	while a < y then
-		a++;
+	for a is 0..5 then
+		if a equals 1 then
+			continue;
+		end;
+		print(a);
 	end;
 END.
