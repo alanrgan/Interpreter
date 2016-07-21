@@ -21,7 +21,7 @@ class AST(object):
     pass
 
 class BinOp(AST):
-    def __init__(self, left, op, right):
+    def __init__(self, left, op, right, env=None):
         self.left = left
         self.token = self.op = op
         self.right = right
@@ -32,29 +32,30 @@ class Primitive(AST):
         self.value = token.value
         
 class UnaryOp(AST):
-    def __init__(self, op, expr):
+    def __init__(self, op, expr, env=None):
         self.token = self.op = op
         self.expr = expr
         
 class Compound(AST):
     """Represents a 'BEGIN ... END' block"""
-    def __init__(self):
+    def __init__(self, env):
+        self.env = env
         self.children = []
         
 class Conditional(AST):
     """Represents a conditional fork"""
-    def __init__(self, pred, conseq, alt=None):
+    def __init__(self, pred, conseq, alt=None, env=None):
         self.pred = pred
         self.conseq = conseq
         self.alt = alt
 
 class While(AST):
-    def __init__(self, pred, conseq):
+    def __init__(self, pred, conseq, env=None):
         self.pred = pred
         self.conseq = conseq
 
 class For(AST):
-    def __init__(self, var, assign, range, cond, post, conseq):
+    def __init__(self, var, assign, range, cond, post, conseq, env=None):
         self.assign = assign
         self.range = range
         self.cond = cond
@@ -63,18 +64,52 @@ class For(AST):
         self.var = var
 
 class Assign(AST):
-    def __init__(self, left, op, right):
+    def __init__(self, left, op, right, env=None):
         self.left = left
         self.token = self.op = op
         self.right = right
 
 class Var(AST):
-    def __init__(self, token):
+    def __init__(self, token, env=None):
+        self.env = env
         self.token = token
         self.value = token.value
 
 class NoOp(AST):
     pass
+
+class Env(object):
+    def __init__(self, parent=None):
+        self.vars = {} if parent is None else parent.vars.copy()
+        self.parent = parent
+
+    def extend(self):
+        return Env(parent=self)
+
+    def lookup(self, name):
+        scope = self
+        while scope is not None:
+            if name in scope.vars:
+                if scope.parent is not None and name not in scope.parent.vars:
+                    return scope
+            scope = scope.parent
+        return None
+
+    def set(self, name, value):
+        scope = self.lookup(name)
+        scope = self if scope is None else scope
+        scope.vars[name] = value
+        return value
+
+    def get(self, name):
+        if name in self.vars:
+            return self.vars[name]
+        else:
+            return None
+
+    def define(self, name, value):
+        self.vars[name] = value
+        return value
 
 class Token(object):
     def __init__(self, type, value):
@@ -303,19 +338,19 @@ class Parser(object):
         else:
             self.error(token_type)
 
-    def variable(self):
-        node = Var(self.current_token)
+    def variable(self, env):
+        node = Var(self.current_token, env)
         self.eat(ID)
         return node
 
-    def assignment_statement(self):
-        left = self.variable()
+    def assignment_statement(self, env):
+        left = self.variable(env)
         self.eat(ASSIGN)
         if self.lexer.peekToken().type == ASSIGN:
-            right = self.assignment_statement()
+            right = self.assignment_statement(env)
         else:
-            right = self.expr_a()
-        return Assign(left, Token(Assign, 'is'), right)
+            right = self.expr_a(env)
+        return Assign(left, Token(Assign, 'is'), right, env)
 
     def comment(self):
         self.eat(COMMENT)
@@ -332,60 +367,61 @@ class Parser(object):
         self.eat(BLOCK)
         return self.empty()
 
-    def incdec_statement(self):
+    def incdec_statement(self, env):
         """
         incdec is same as varASSIGN(varADD1)
         """
-        left = self.variable()
+        left = self.variable(env)
         token = self.current_token
         one = Primitive(Token(INTEGER, 1))
         if token.type == PPLUS:
             self.eat(PPLUS)
-            right = BinOp(left, Token(PLUS, '+'), one)
+            right = BinOp(left, Token(PLUS, '+'), one, env)
         else:
             self.eat(MMINUS)
-            right = BinOp(left, Token(MINUS, '-'), one)
+            right = BinOp(left, Token(MINUS, '-'), one, env)
         node = Assign(left, token, right)
         return node
         
-    def incdec_assign_statement(self):
-        left = self.variable()
+    def incdec_assign_statement(self, env):
+        left = self.variable(env)
         token = self.current_token
         if token.type == PEQUALS:
             self.eat(PEQUALS)
-            right = BinOp(left, Token(PLUS, '+'), self.expr_d())
+            right = BinOp(left, Token(PLUS, '+'), self.expr_d(), env)
         elif token.type == MEQUALS:
             self.eat(MEQUALS)
-            right = BinOp(left, Token(MINUS, '-'), self.expr_d())
-        node = Assign(left, token, right)
+            right = BinOp(left, Token(MINUS, '-'), self.expr_d(), env)
+        node = Assign(left, token, right, env)
         return node
 
-    def statement(self):
+    def statement(self, env):
         if self.current_token.type == BEGIN:
-            node = self.compound_statement()
+            node = self.compound_statement(env)
         elif self.current_token.type == IF:
             in_else = self.prev_token.type == ELSE
-            node = self.if_statement(in_else=in_else)
+            node = self.if_statement(env=env,in_else=in_else)
         elif self.current_token.type == WHILE:
-            node = self.while_loop()
+            node = self.while_loop(env)
         elif self.current_token.type == FOR:
-            node = self.for_loop()
+            node = self.for_loop(env)
         elif self.current_token.type == ID:
             next_token = self.lexer.peekToken()
             if next_token.type == ASSIGN:
-                node = self.assignment_statement()
+                node = self.assignment_statement(env)
             elif next_token.type in (PPLUS, MMINUS):
-                node = self.incdec_statement()
+                node = self.incdec_statement(env)
             elif next_token.type in (PEQUALS, MEQUALS):
-                node = self.incdec_assign_statement()
+                node = self.incdec_assign_statement(env)
             else:
                 node = self.empty()
         else:
             node = self.empty()
         return node
 
-    def statement_list(self):
-        node = self.statement()
+    def statement_list(self, env):
+        node = self.statement(env)
+
         results = [node]
         while self.current_token.type in (SEMI,COMMENT,BLOCK):
             if self.current_token.type == SEMI:
@@ -394,102 +430,109 @@ class Parser(object):
                 self.comment()
             else:
                 self.block_comment()
-            results.append(self.statement())
+            results.append(self.statement(env))
             
         if self.current_token.type == ID:
             self.error()
             
         return results
 
-    def while_loop(self):
+    def while_loop(self, env):
         self.eat(WHILE)
-        predicate = self.expr_a()
+        predicate = self.expr_a(env)
         self.eat(THEN)
-        consequent = self.compound_statement()
+        consequent = self.compound_statement(env)
         self.eat(END)
-        return While(predicate, consequent)
+        return While(predicate, consequent, env)
 
-    def for_loop(self):
+    def for_loop(self, env):
         var = begin_range = end_range = cond = post = None
         self.eat(FOR)
 
-        assignment = self.assignment_statement()
+        env = env.extend()
+
+        assignment = self.assignment_statement(env)
         begin_range = None
         if self.current_token.type == DOTRANGE:
             var = assignment.left
             begin_range = assignment.right
             self.eat(DOTRANGE)
-            end_range = self.expr_a()
+            end_range = self.expr_a(env)
 
             if self.current_token.type == COMMA:
                 # if post step is specified
                 self.eat(COMMA)
-                post = self.statement()
+                post = self.statement(env)
             else:
                 # otherwise default is single step increment
                 one = Primitive(Token(INTEGER, 1))
-                right = BinOp(var, Token(PLUS, '+'), one)
-                post = Assign(var, Token('ASSIGN','is'), right)
+                right = BinOp(var, Token(PLUS, '+'), one, env)
+                post = Assign(var, Token('ASSIGN','is'), right, env)
                 
         # if condition based for loop
         if begin_range is None:
-            cond = self.expr_a()
             self.eat(COMMA)
-            post = self.expr_a()
+            cond = self.expr_a(env)
+            self.eat(COMMA)
+            post = self.expr_a(env)
         
         self.eat(THEN)
-        consequent = self.compound_statement()
+        consequent = self.compound_statement(env)
         self.eat(END)
-        return For(var=var,assign=assignment,range=(begin_range,end_range),cond=cond,post=post,conseq=consequent)
+        return For(var=var,assign=assignment,range=(begin_range,end_range),cond=cond,post=post,conseq=consequent,env=env)
 
-    def if_statement(self, in_else=None):
+    def if_statement(self, env, in_else=None):
         """if_statement : IF BOOL THEN statement_list (else_statement)"""
         if in_else is None:
             in_else = False
 
         self.eat(IF)
-        predicate = self.expr_a()
+        predicate = self.expr_a(env)
         self.eat(THEN)
 
-        consequent = self.compound_statement()
+        consequent = self.compound_statement(env)
 
         if self.current_token.type == ELSE:
-            alternative = self.else_statement()
+            alternative = self.else_statement(env)
         else:
             alternative = None
 
         if not in_else:
             self.eat(ENDIF)
 
-        cond = Conditional(predicate,consequent,alternative)
+        cond = Conditional(predicate,consequent,alternative, env)
 
         return cond
 
-    def else_statement(self):
+    def else_statement(self, env):
         """else_statement : ELSE statement_list"""
         self.eat(ELSE)
-        alternative = self.compound_statement()
+        alternative = self.compound_statement(env)
         return alternative
 
-    def boolean(self):
-        node = self.expr_a()
+    def boolean(self, env):
+        node = self.expr_a(env)
         self.eat(BOOL)
         return node
 
-    def compound_statement(self):
+    def compound_statement(self, env):
         """compound_statement : statement_list """
-        nodes = self.statement_list()
+        caller = inspect.stack()[1][3]
+        if caller != 'program':
+            env = env.extend()
+
+        nodes = self.statement_list(env)
         
-        root = Compound()
+        root = Compound(env)
         for node in nodes:
             root.children.append(node)
             
         return root
             
-    def program(self):
+    def program(self, env):
         """program : compound_statement DOT"""
         self.eat(BEGIN)
-        node = self.compound_statement()
+        node = self.compound_statement(env)
         self.eat(END)
         self.eat(DOT)
         return node
@@ -498,75 +541,75 @@ class Parser(object):
         return NoOp()
         
     # NTS: order matters here
-    def factor(self):
+    def factor(self, env):
         token = self.current_token
         if token.type in (PLUS, MINUS):
             self.eat(token.type)
-            node = UnaryOp(token, self.factor())
+            node = UnaryOp(token, self.factor(env))
             return node
         elif token.type in (INTEGER, BOOL):
             self.eat(token.type)
             return Primitive(token)
         elif token.type == LPAREN:
             self.eat(LPAREN)
-            node = self.expr_a()
+            node = self.expr_a(env)
             self.eat(RPAREN)
             return node
         elif token.type == NOT:
             self.eat(NOT)
-            node = UnaryOp(token, self.expr_a())
+            node = UnaryOp(token, self.expr_a(env))
             return node
         else:
-            node = self.variable()
+            node = self.variable(env)
             return node
     
     # highest precedence expression  
-    def expr_e(self):
+    def expr_e(self, env):
         token = self.lexer.peekToken()
 
         if token.type in (MULTIPLY, DIVIDE):
-            return self.expr(tup=(MULTIPLY,DIVIDE), func=self.factor)
+            return self.expr(tup=(MULTIPLY,DIVIDE), func=self.factor, env=env)
         elif token.type in (PPLUS, MMINUS):
-            return self.incdec_statement()
-        return self.factor()
+            return self.incdec_statement(env)
+        return self.factor(env)
         
     # expression with less precedence    
-    def expr_d(self):
+    def expr_d(self, env):
         """
         S -> A PLUS B
         S -> A MINUS B
         A,B -> S, INTEGER
         """
-        return self.expr(tup=(PLUS,MINUS), func=self.expr_e)
+        return self.expr(tup=(PLUS,MINUS), func=self.expr_e, env=env)
 
     # expression with even less precedence
-    def expr_c(self):
+    def expr_c(self, env):
         """
         expr_c -> expr_d
         expr_c -> expr_c (GTHAN|LTHAN|EQUALS) expr_c
         """
-        return self.expr(tup=(GTHAN,LTHAN,GTEQUALS,LTEQUALS), func=self.expr_d)
+        return self.expr(tup=(GTHAN,LTHAN,GTEQUALS,LTEQUALS), func=self.expr_d, env=env)
 
     # expression with even less precedence
-    def expr_b(self):
-        return self.expr(tup=(EQUALS,NEQUALS), func=self.expr_c)
+    def expr_b(self, env):
+        return self.expr(tup=(EQUALS,NEQUALS), func=self.expr_c, env=env)
         
-    def expr_a(self):
-        return self.expr(tup=(AND,OR),func=self.expr_b)
+    def expr_a(self, env):
+        return self.expr(tup=(AND,OR),func=self.expr_b, env=env)
 
     # func is the next highest precedence expr function
     # and tup is a tuple containing token types to evaluate
-    def expr(self, tup, func):
-        node = func()
+    def expr(self, tup, func, env):
+        node = func(env)
 
         while self.current_token.type in tup:
             token = self.current_token
             self.eat(token.type)
-            node =  BinOp(left=node, op=token, right=func())
+            node =  BinOp(left=node, op=token, right=func(env), env=env)
         return node
 
-    def parse(self):
-        node = self.program()
+    def parse(self, env):
+        node = self.program(env)
         if self.current_token.type != EOF:
             self.error()
             
@@ -582,7 +625,7 @@ class NodeVisitor(object):
         raise Exception('No visit_{} method'.format(type(node).__name__))
         
 class Interpreter(NodeVisitor):
-    GLOBAL_SCOPE = {}    
+    GLOBAL_ENV = Env()
     
     def __init__(self, parser):
         self.parser = parser
@@ -635,11 +678,13 @@ class Interpreter(NodeVisitor):
             self.visit(node)
 
     def visit_For(self, node):
-        self.visit(node.assign)
+        left = self.visit(node.assign)
         self.visit_For_helper(node)
 
     def visit_For_helper(self, node):
         if node.var is not None:
+            print("here")
+            print(node.var.env.vars)
             cond = self.visit(node.var) < self.visit(node.range[1])
         else:
             cond = self.visit_Bool(node.cond)
@@ -674,19 +719,22 @@ class Interpreter(NodeVisitor):
     
     def visit_Assign(self, node):
         var_name = node.left.value
-        self.GLOBAL_SCOPE[var_name] = self.visit(node.right)
-        return self.GLOBAL_SCOPE[var_name]
+        right = self.visit(node.right)
+        node.left.env.set(var_name, right)
+        print(node.left.env.vars)
+        return right
         
     def visit_Var(self, node):
         var_name = node.value
-        val = self.GLOBAL_SCOPE.get(var_name)
+        val = node.env.get(var_name)
         if val is None:
+            print(node.env.vars)
             raise NameError(repr(var_name))
         else:
             return val
             
     def interpret(self):
-        self.visit(self.parser.parse())
+        self.visit(self.parser.parse(self.GLOBAL_ENV))
         
 def main():
     import sys
@@ -696,7 +744,7 @@ def main():
     parser = Parser(lexer)
     interpreter = Interpreter(parser)
     interpreter.interpret()
-    print(interpreter.GLOBAL_SCOPE)
+    print(interpreter.GLOBAL_ENV.vars)
         
 if __name__ == '__main__':
     main()

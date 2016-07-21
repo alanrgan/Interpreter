@@ -1,15 +1,8 @@
 BEGIN
-	x is 3; y is 2;
+	x is 3; y is 0;
 
-	for a is -3..x, a+=10 then
-		y++;
+	for a is 0..x then
+		x--;
 	end
-
-	$$ the following code is to demonstrate while loops $$
-	$$ block comments within statements are not allowed
-	while x < 8 then
-		x is x-- + y; $ testing here
-	end
-	$$
 
 END.
