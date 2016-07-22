@@ -12,13 +12,19 @@ BREAK, CONTINUE = 'BREAK', 'CONTINUE'
 GTHAN,LTHAN,GTEQUALS,LTEQUALS = 'GTHAN', 'LTHAN', 'GTEQUALS', 'LTEQUALS'
 EQUALS,NOT,NEQUALS = 'EQUALS', 'NOT', 'NEQUALS'
 AND, OR = 'AND', 'OR'
-DOTRANGE = 'DOTRANGE'
-COMMENT, BLOCK, PRINT = 'COMMENT', 'BLOCK', 'PRINT'
+DCOLON, DOTRANGE, QUOT = 'DCOLON', 'DOTRANGE', 'QUOT'
+STRING, COMMENT, BLOCK, PRINT = 'STRING', 'COMMENT', 'BLOCK', 'PRINT'
+NONE = 'NONE'
 
 import inspect
 import copy
 import unicodedata
 from collections import deque
+
+def union(a, b):
+    z = a.copy()
+    z.update(b)
+    return z
 
 class AST(object):
     pass
@@ -65,6 +71,23 @@ class For(AST):
         self.conseq = conseq
         self.var = var
 
+class Func(AST):
+    def __init__(self, name, params, conseq, ret=None):
+        self.name = name
+        self.params = params
+        self.conseq = conseq
+        self.ret = ret
+
+class ArgList(AST):
+    def __init__(self, args):
+        self.args = args
+
+class Call(AST):
+    """Represents a function call"""
+    def __init__(self, funcname, args):
+        self.funcname = funcname
+        self.args = args
+
 class Break(AST):
     pass
 
@@ -92,6 +115,7 @@ class Print(AST):
 class Env(object):
     def __init__(self, parent=None):
         self.vars = {} if parent is None else copy.deepcopy(parent.vars)
+        self.funcs = {} if parent is None else copy.deepcopy(parent.funcs)
         self.parent = parent
 
     def extend(self):
@@ -102,13 +126,15 @@ class Env(object):
         deq = deque()
         while scope is not None:
             deq.append(scope)
-            if name in scope.vars:
-                if scope.parent is None or (scope.parent is not None and name not in scope.parent.vars):
+            if name in union(scope.vars, scope.funcs):
+                if scope.parent is None or (scope.parent is not None and name not in union(scope.parent.vars,scope.parent.funcs)):
                     return (scope, list(reversed(deq)))
             scope = scope.parent
         return None
 
     def set(self, name, value):
+        if name in self.funcs:
+            raise Exception(repr(name) + " is already defined as a function")
         tup = self.lookup(name)
         scope = self if tup is None else tup[0]#scope
         deq = [] if tup is None else tup[1]
@@ -121,14 +147,20 @@ class Env(object):
                 env.vars.update(env.parent.vars)
         return value
 
-    def get(self, name):
-        if name in self.vars:
+    def get(self, name, is_func=None):
+        is_func = False if is_func is None else is_func
+        if not is_func and name in self.vars:
             return self.vars[name]
+        elif is_func and name in self.funcs:
+            return self.funcs[name]
         else:
             return None
 
     def define(self, name, value):
-        self.vars[name] = value
+        if name not in self.funcs and name not in self.vars:
+            self.funcs[name] = value
+        else:
+            raise Exception(repr(name) + " is already defined")
         return value
 
 class Token(object):
@@ -297,6 +329,10 @@ class Lexer(object):
                 self.advance()
                 return Token(DOT, '.')
 
+            if self.current_char == ':' and self.peek() == ':':
+                self.advance(2)
+                return Token(DCOLON, '::')
+
             if self.current_char == '>' and self.peek() == '=':
                 self.advance(2)
                 return Token(GTEQUALS, '>=')
@@ -312,6 +348,10 @@ class Lexer(object):
             if self.current_char == '<':
                 self.advance()
                 return Token(LTHAN, '<')
+
+            if self.current_char == '"':
+                self.advance()
+                return Token(QUOT, '"')
                 
             self.error()
             
@@ -368,26 +408,49 @@ class Parser(object):
     def assignment_statement(self):
         left = self.variable()
         self.eat(ASSIGN)
-        if self.lexer.peekToken().type == ASSIGN:
+        if self.current_token.type != QUOT and self.lexer.peekToken().type == ASSIGN:
             right = self.assignment_statement()
         else:
             right = self.expr_a()
         return Assign(left, Token(Assign, 'is'), right)
 
     def comment(self):
-        self.eat(COMMENT)
+        if self.current_token.type != COMMENT:
+            self.error(COMMENT)
+
         while self.lexer.current_char != '\n':
-            self.lexer.get_next_token()
+            self.lexer.advance()
         self.prev_token = Token(COMMENT,'$')
         self.current_token = self.lexer.get_next_token()
         return self.empty()
         
     def block_comment(self):
-        self.eat(BLOCK)
-        while self.current_token.type != BLOCK:
-            self.current_token = self.lexer.get_next_token()
+        if self.current_token.type != BLOCK:
+            self.error(BLOCK)
+
+        while self.lexer.current_char + self.lexer.peek() != '$$':
+            self.lexer.advance()
+        self.prev_token = Token(BLOCK, '$$')
+        self.current_token = self.lexer.get_next_token()
         self.eat(BLOCK)
         return self.empty()
+
+    def string(self):
+        result = ''
+        while self.lexer.current_char != '"':
+            if self.lexer.current_char == '\\' and self.lexer.peek() == '"':
+                result += '"'
+                self.lexer.advance(2)
+            elif self.lexer.current_char == '\\' and self.lexer.peek() == 'n':
+                result += '\n'
+                self.lexer.advance(2)
+            else:
+                result += self.lexer.current_char
+                self.lexer.advance()
+        self.prev_token = Token(QUOT, '"')
+        self.current_token = self.lexer.get_next_token()
+        self.eat(QUOT)
+        return Token(STRING, result)
 
     def incdec_statement(self):
         """
@@ -441,6 +504,10 @@ class Parser(object):
                 node = self.incdec_statement()
             elif next_token.type in (PEQUALS, MEQUALS):
                 node = self.incdec_assign_statement()
+            elif next_token.type == DCOLON:
+                node = self.func_def()
+            elif next_token.type == LPAREN:
+                node = self.call()
             else:
                 node = self.empty()
         else:
@@ -450,7 +517,7 @@ class Parser(object):
     def statement_list(self):
         node = self.statement()
 
-        results = [node]
+        results = deque([node])
         while self.current_token.type in (SEMI,COMMENT,BLOCK):
             if self.current_token.type == SEMI:
                 self.eat(SEMI)
@@ -458,7 +525,11 @@ class Parser(object):
                 self.comment()
             else:
                 self.block_comment()
-            results.append(self.statement())
+            statement = self.statement()
+            if type(statement) is Func:
+                results.appendleft(statement)
+            else:
+                results.append(statement)
             
         if self.current_token.type == ID:
             self.error()
@@ -506,6 +577,47 @@ class Parser(object):
         consequent = self.compound_statement()
         self.eat(END)
         return For(var=var,assign=assignment,range=(begin_range,end_range),cond=cond,post=post,conseq=consequent)
+
+    def func_def(self):
+        name = self.current_token.value
+        self.eat(ID)
+        self.eat(DCOLON)
+        self.eat(LPAREN)
+        params = self.arglist(is_def=True) # can be nothing ()
+        self.eat(RPAREN)
+        consequent = self.compound_statement()
+        self.eat(END)
+        return Func(name=name,params=params,conseq=consequent)
+
+    # if is_def, then arglist declares variables in func scope
+    # otherwise, arglist is parameter list
+    def arglist(self, is_def):
+        args = []
+
+        token = self.current_token
+        if token.type != RPAREN:
+            if is_def:
+                token = self.variable()
+            else:
+                token = self.expr_a()
+            args.append(token)
+
+        while self.current_token.type == COMMA:
+            self.eat(COMMA)
+            if is_def:
+                token = self.variable()
+            else:
+                token = self.expr_a()
+            args.append(token)
+        return args
+
+    def call(self):
+        name = self.current_token.value
+        self.eat(ID)
+        self.eat(LPAREN)
+        args = self.arglist(is_def=False)
+        self.eat(RPAREN)
+        return Call(name, args)
 
     def break_statement(self):
         self.eat(BREAK)
@@ -562,9 +674,11 @@ class Parser(object):
         nodes = self.statement_list()
         
         root = Compound()
+        root.children = copy.deepcopy(nodes)
+        """
         for node in nodes:
             root.children.append(node)
-            
+        """
         return root
             
     def program(self):
@@ -588,6 +702,9 @@ class Parser(object):
         elif token.type in (INTEGER, BOOL):
             self.eat(token.type)
             return Primitive(token)
+        elif token.type == QUOT:
+            string = self.string()
+            return Primitive(string)
         elif token.type == LPAREN:
             self.eat(LPAREN)
             node = self.expr_a()
@@ -603,7 +720,7 @@ class Parser(object):
     
     # highest precedence expression  
     def expr_e(self):
-        token = self.lexer.peekToken()
+        token = self.lexer.peekToken() if self.current_token.type != QUOT else Token(QUOT, '"')
 
         if token.type in (MULTIPLY, DIVIDE):
             return self.expr(tup=(MULTIPLY,DIVIDE), func=self.factor)
@@ -659,7 +776,7 @@ class NodeVisitor(object):
         visitor = getattr(self, method_name, self.generic_visit)
         return visitor(node, env, caller)
         
-    def generic_visit(self, node):
+    def generic_visit(self, node, env=None, caller=None):
         raise Exception('No visit_{} method'.format(type(node).__name__))
         
 class Interpreter(NodeVisitor):
@@ -672,6 +789,10 @@ class Interpreter(NodeVisitor):
         left = self.visit(node.left, env)
         right = self.visit(node.right, env)
         if node.op.type == PLUS:
+            if type(left) is str:
+                right = str(right)
+            elif type(right) is str:
+                left = str(left)
             return left + right
         elif node.op.type == MINUS:
             return left - right
@@ -725,7 +846,7 @@ class Interpreter(NodeVisitor):
 
     def visit_For(self, node, env, caller):
         env = env.extend()
-        left = self.visit(node.assign, env)
+        self.visit(node.assign, env)
         self.visit_For_helper(node, env)
 
     def visit_For_helper(self, node, env, caller=None):
@@ -759,12 +880,25 @@ class Interpreter(NodeVisitor):
                 raise Exception("'not' can only be applied to boolean values")
             
     def visit_Compound(self, node, env, caller=None):
-        if caller not in ('interpret','for'):
+        if caller not in ('interpret','for','func'):
             env = env.extend()
         for child in node.children:
             res = self.visit(child, env)
             if res in ('Break', 'Continue'):
                 return res
+
+    def visit_Func(self, node, env, caller=None):
+        env.define(node.name, node)
+
+    def visit_Call(self, node, env, caller=None):
+        env = env.extend()
+        func = env.get(node.funcname, True)
+        if len(node.args) != len(func.params):
+            raise Exception(repr(node.funcname) + ": argument list must match parameter list")
+        for arg, param in zip(node.args, func.params):
+            assign = Assign(param, Token('ASSIGN','is'), arg)
+            self.visit(assign, env)
+        self.visit(func.conseq, env)
 
     def visit_Break(self, node, env, caller=None):
         return type(node).__name__

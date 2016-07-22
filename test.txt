@@ -1,11 +1,13 @@
 BEGIN
-	x is a is 0;
-	y is 10000;
-
-	for a is 0..5 then
-		if a equals 1 then
-			continue;
+	fib::(n)
+		a is 0;
+		b is 1;
+		for i is 0..n-1 then
+			b is a + b;
+			a is b-a;
 		end;
 		print(a);
 	end;
+
+	fib(10)
 END.
