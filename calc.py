@@ -8,7 +8,7 @@ DOT, COMMA, SEMI = 'DOT', 'COMMA', 'SEMI'
 PPLUS, MMINUS = 'PPLUS', 'MMINUS'
 PEQUALS, MEQUALS = 'PEQUALS', 'MEQUALS'
 WHILE, FOR, IF, ELSE, THEN = 'WHILE', 'FOR', 'IF', 'ELSE', 'THEN'
-BREAK, CONTINUE = 'BREAK', 'CONTINUE'
+BREAK, CONTINUE, RETURN = 'BREAK', 'CONTINUE', 'RETURN'
 GTHAN,LTHAN,GTEQUALS,LTEQUALS = 'GTHAN', 'LTHAN', 'GTEQUALS', 'LTEQUALS'
 EQUALS,NOT,NEQUALS = 'EQUALS', 'NOT', 'NEQUALS'
 AND, OR = 'AND', 'OR'
@@ -136,7 +136,7 @@ class Env(object):
         if name in self.funcs:
             raise Exception(repr(name) + " is already defined as a function")
         tup = self.lookup(name)
-        scope = self if tup is None else tup[0]#scope
+        scope = self if tup is None else tup[0]
         deq = [] if tup is None else tup[1]
         scope.vars[name] = value
 
@@ -197,6 +197,7 @@ RESERVED_KEYWORDS = {
     'for': Token(FOR, 'for'),
     'print': Token(PRINT, 'print'),
     'continue': Token(CONTINUE, 'continue'),
+    'return': Token(RETURN, 'return'),
 }        
     
 class Lexer(object):

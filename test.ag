@@ -1,0 +1,18 @@
+BEGIN
+	a is 0;
+	b is 1;
+	fib::(n, c, d)
+		if n equals 0 then
+			break;
+		end;
+		fib(n-1,d-c,c+d);
+		$ To do pass by value
+		print(c);
+	end;
+
+	"if"
+
+
+	fib(11, a, b)
+END.
+
