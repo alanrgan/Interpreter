@@ -88,6 +88,10 @@ class Call(AST):
         self.funcname = funcname
         self.args = args
 
+class Return(AST):
+    def __init__(self, retval):
+        self.retval = retval
+
 class Break(AST):
     pass
 
@@ -113,13 +117,14 @@ class Print(AST):
         self.arg = arg
 
 class Env(object):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, funcscope=None):
         self.vars = {} if parent is None else copy.deepcopy(parent.vars)
         self.funcs = {} if parent is None else copy.deepcopy(parent.funcs)
         self.parent = parent
+        self.funcscope = funcscope
 
     def extend(self):
-        return Env(parent=self)
+        return Env(parent=self, funcscope=self.funcscope)
 
     def lookup(self, name):
         scope = self
@@ -132,10 +137,11 @@ class Env(object):
             scope = scope.parent
         return None
 
-    def set(self, name, value):
+    def set(self, name, value, passbyval=None):
+        passbyval = passbyval if passbyval is not None else False
         if name in self.funcs:
             raise Exception(repr(name) + " is already defined as a function")
-        tup = self.lookup(name)
+        tup = self.lookup(name) if not passbyval else None
         scope = self if tup is None else tup[0]
         deq = [] if tup is None else tup[1]
         scope.vars[name] = value
@@ -495,6 +501,8 @@ class Parser(object):
             node = self.print_func()
         elif self.current_token.type == BREAK:
             node = self.break_statement()
+        elif self.current_token.type == RETURN:
+            node = self.return_statement()
         elif self.current_token.type == CONTINUE:
             node = self.continue_statement()
         elif self.current_token.type == ID:
@@ -624,6 +632,11 @@ class Parser(object):
         self.eat(BREAK)
         return Break()
 
+    def return_statement(self):
+        self.eat(RETURN)
+        retval = self.expr_a()
+        return Return(retval)
+
     def continue_statement(self):
         self.eat(CONTINUE)
         return Continue()
@@ -714,6 +727,9 @@ class Parser(object):
         elif token.type == NOT:
             self.eat(NOT)
             node = UnaryOp(token, self.expr_a())
+            return node
+        elif token.type == ID and self.lexer.peekToken().type == LPAREN:
+            node = self.call()
             return node
         else:
             node = self.variable()
@@ -858,10 +874,10 @@ class Interpreter(NodeVisitor):
             else:
                 cond = self.visit_Bool(node.cond, env)
             res = self.visit(node.conseq, env, 'for')
-            broken, cont = res == 'Break', res == 'Continue'
+            broken, cont, returned = res == 'Break', res == 'Continue', res == 'Return'
             if not broken:
                 self.visit(node.post, env)
-            cond = cond and (cont or not broken)
+            cond = cond and (cont or (not broken and not returned))
 
     def visit_UnaryOp(self, node, env, caller=None):
         op = node.op.type
@@ -885,21 +901,39 @@ class Interpreter(NodeVisitor):
             env = env.extend()
         for child in node.children:
             res = self.visit(child, env)
-            if res in ('Break', 'Continue'):
+            if res in ('Break', 'Continue', 'Return'):
                 return res
 
     def visit_Func(self, node, env, caller=None):
         env.define(node.name, node)
+        env.funcscope = {'env':env, 'funcname':node.name}
 
     def visit_Call(self, node, env, caller=None):
+        scope = env.funcscope['env']
+        func = scope.get(env.funcscope['funcname'], True)
         env = env.extend()
-        func = env.get(node.funcname, True)
         if len(node.args) != len(func.params):
             raise Exception(repr(node.funcname) + ": argument list must match parameter list")
         for arg, param in zip(node.args, func.params):
             assign = Assign(param, Token('ASSIGN','is'), arg)
-            self.visit(assign, env)
-        self.visit(func.conseq, env)
+            self.visit_Assign(assign, env, passbyval=True)
+        self.visit(func.conseq, env, 'func')
+        if func.ret is not None:
+            print("scop"+ repr(env.vars))
+            retval = self.visit(func.ret, env)
+            print("returned "+ repr(retval))
+            return retval#self.visit(func.ret, env)
+        else:
+            print("no func.ret")
+            return None
+        #return self.visit(func.ret, env) if func.ret is not None else None
+
+    def visit_Return(self, node, env, caller=None):
+        if env.funcscope is not None:
+            scope = env.funcscope['env']
+            funcname = env.funcscope['funcname']
+            scope.get(funcname, True).ret = node.retval
+        return type(node).__name__
 
     def visit_Break(self, node, env, caller=None):
         return type(node).__name__
@@ -910,15 +944,17 @@ class Interpreter(NodeVisitor):
     def visit_NoOp(self, node, env, caller=None):
         pass
     
-    def visit_Assign(self, node, env, caller=None):
+    def visit_Assign(self, node, env, passbyval=None, caller=None):
         var_name = node.left.value
         right = self.visit(node.right, env)
-        env.set(var_name, right)
+        env.set(var_name, right, passbyval)
         return right
         
     def visit_Var(self, node, env, caller=None):
         var_name = node.value
         val = env.get(var_name)
+        print("vis var")
+        print(env.vars)
         if val is None:
             raise NameError(repr(var_name) + ' is not defined in this scope')
         else:
