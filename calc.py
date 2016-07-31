@@ -918,15 +918,7 @@ class Interpreter(NodeVisitor):
             assign = Assign(param, Token('ASSIGN','is'), arg)
             self.visit_Assign(assign, env, passbyval=True)
         self.visit(func.conseq, env, 'func')
-        if func.ret is not None:
-            print("scop"+ repr(env.vars))
-            retval = self.visit(func.ret, env)
-            print("returned "+ repr(retval))
-            return retval#self.visit(func.ret, env)
-        else:
-            print("no func.ret")
-            return None
-        #return self.visit(func.ret, env) if func.ret is not None else None
+        return self.visit(func.ret, env) if func.ret is not None else None
 
     def visit_Return(self, node, env, caller=None):
         if env.funcscope is not None:
@@ -953,8 +945,6 @@ class Interpreter(NodeVisitor):
     def visit_Var(self, node, env, caller=None):
         var_name = node.value
         val = env.get(var_name)
-        print("vis var")
-        print(env.vars)
         if val is None:
             raise NameError(repr(var_name) + ' is not defined in this scope')
         else:
